@@ -1,0 +1,110 @@
+// router.get("/:id", UserMiddleware, MessageController.getMessage);
+// router.post("/send/:id", UserMiddleware, MessageController.sendmessage);
+// router.put("mark/:id", UserMiddleware, MessageController.markmessageSeen);    
+
+controller.js
+// get all messages for selected user
+exports.getMessage = async (req, res) => {
+  try {
+    const { id: selectedUserId } = req.params;
+    const myId = req.user.userId;
+
+    const messages = await Messagemodel.find({
+      $or: [
+        { senderId: myId, receiverId: selectedUserId },
+        { senderId: selectedUserId, receiverId: myId },
+      ],
+    }).sort({ createdAt: 1 }); // Added sorting by creation time
+
+    // Mark messages from selectedUserId to me as seen
+    await Messagemodel.updateMany(
+      {
+        senderId: selectedUserId,
+        receiverId: myId,
+        seen: false,
+      },
+      {
+        seen: true,
+      }
+    );
+
+    res.status(200).json({ success: true, messages }); // Changed status to 200 for GET requests
+  } catch (error) {
+    console.log(error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// send message to selected user
+exports.sendmessage = async (req, res) => {
+  try {
+    const { text, image } = req.body;
+    const receiverId = req.params.id;
+    const senderId = req.user.userId;
+
+    if (!text && !image) {
+      return res.status(400).json({
+        success: false,
+        message: "Message content is required",
+      });
+    }
+
+    let imageUrl = null;
+    if (image) {
+      const uploadResponse = await cloudinary.uploader.upload(image);
+      imageUrl = uploadResponse.secure_url;
+    }
+
+    const newMessage = await Messagemodel.create({
+      senderId,
+      receiverId,
+      text,
+      image: imageUrl,
+    });
+
+    // Populate sender details if needed
+    await newMessage.populate("senderId", "username profilePicture");
+    await newMessage.populate("receiverId", "username profilePicture");
+
+    // emit new message to the receiver socket
+    const io = getIO();
+    const receiverSocketId = userSocketMap[receiverId];
+
+    if (receiverSocketId && io) {
+      io.to(receiverSocketId).emit("newMessage", newMessage);
+    }
+
+    // Also emit to sender's other devices
+    const senderSocketId = userSocketMap[senderId];
+    if (senderSocketId && io) {
+      io.to(senderSocketId).emit("newMessage", newMessage);
+    }
+
+    res.status(201).json({ success: true, message: newMessage }); // Changed key from newMessage to message
+  } catch (error) {
+    console.log(error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// api to mark message as seen using message id
+exports.markmessageSeen = async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log("req.params --->/markmessageSeen", req.params);
+    await Messagemodel.findByIdAndUpdate(id, { seen: true });
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.log(error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+| Emoji | Description                     | Notes                        |
+| ----- | ------------------------------- | ---------------------------- |
+| 🟠    | Orange dot                      | Warning/Error nuance         |
+| 🔴    | Solid red dot (already avoided) |                              |
+| 🟣    | Purple dot                      | Custom or minor error        |
+| ⚫     | Black dot                       | System/internal failure      |
+| 🟤    | Brown dot                       | Rare, less attention-seeking |
+| 🔘    | Radio button (outline)          | Elegant log symbol           |
