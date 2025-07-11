@@ -6,6 +6,7 @@ const generateToken = require("../utils/generateToken");
 const conrdinary = require("../utils/Cloudinary");
 const generateOtp = require("../utils/generateOTP");
 const sendEmailUtil = require("../utils/Nodemailerutil");
+const mongoose = require("mongoose");
 const jwt = require("jsonwebtoken");
 
 {
@@ -53,6 +54,26 @@ exports.Register = async (req, res) => {
       is_Confirmed: false,
     });
 
+    //invited by
+    const inviter = await User.findOne({ "invitedUsers.email": email });
+    if (inviter) {
+      // Add invitedBy info to the new user
+      userCreated.invitedBy = [
+        {
+          _id: inviter._id,
+          email: inviter.email,
+        },
+      ];
+      const invitedUser = inviter.invitedUsers.find((u) => u.email === email);
+      if (invitedUser) {
+        invitedUser.user = userCreated._id;
+        invitedUser.invited_is_Confirmed = false;
+      }
+      await inviter.save();
+    }
+
+    await userCreated.save();
+
     // Send OTP email using utility
     await sendEmailUtil({
       to: email,
@@ -87,6 +108,14 @@ exports.Login = async (req, res) => {
     const userExist = await User.findOne({ email });
     if (!userExist) {
       return res.status(400).json({ message: "Email/Uses Not Valide." });
+    }
+
+    //Check email is verified
+    if (!userExist.is_Confirmed) {
+      return res.status(403).json({
+        message:
+          "Email not verified. Please verify your email before logging in.",
+      });
     }
 
     //Compare hashed password
@@ -265,31 +294,31 @@ exports.resetPassword = async (req, res) => {
 exports.invitedUsers = async (req, res) => {
   try {
     const inviterId = req.user._id;
-    const { email, message } = req.body;
+    const rawEmail = req.body.email;
+    const message = req.body.message || "";
 
-    if (!email) {
+    if (!rawEmail) {
       return res.status(400).json({ message: "Email is required." });
     }
 
-    // Find or create invited user
+    const email = rawEmail.trim().toLowerCase();
+
     let invitedUser = await User.findOne({ email });
 
-    // ✅ If user doesn't exist, create new
+    // Create new invited user if doesn't exist
     if (!invitedUser) {
       invitedUser = new User({
-        email: email.toLowerCase(),
+        email,
         invited_is_Confirmed: false,
+        is_Confirmed: false,
       });
       await invitedUser.save();
     }
 
-    // ✅ Send email even if is_Confirmed = true
     const token = jwt.sign(
       { id: invitedUser._id },
       process.env.JWT_SECRET_KEY,
-      {
-        expiresIn: "1d",
-      }
+      { expiresIn: "7d" }
     );
 
     const link = `http://localhost:5173/contact/${token}`;
@@ -300,27 +329,30 @@ exports.invitedUsers = async (req, res) => {
       text: `Hi,\n\nYou've been invited to join our chat app.\n\nMessage: ${message}\nClick here to join: ${link}`,
     });
 
-    // ✅ Add to inviter's invitedUsers list if not already added
     const inviter = await User.findById(inviterId);
     if (!inviter) {
       return res.status(404).json({ message: "Inviter not found." });
     }
 
-    const alreadyExists = inviter.invitedUsers.some(
+    // Add to inviter's invitedUsers[] only if not already invited
+    const alreadyInvited = inviter.invitedUsers.some(
       (entry) =>
         entry.email === invitedUser.email ||
         (entry.user && entry.user.toString() === invitedUser._id.toString())
     );
 
-    if (!alreadyExists) {
+    if (!alreadyInvited) {
       inviter.invitedUsers.push({
         user: invitedUser._id,
         email: invitedUser.email,
-        is_Confirmed: invitedUser.is_Confirmed,
+        invitationMessage: message,
+        invited_is_Confirmed: false,
       });
-
       await inviter.save();
     }
+
+    // DO NOT add to invitedUser.invitedBy[] here
+    // That will happen in the confirmation controller only
 
     const updatedInviter = await User.findById(inviterId).populate(
       "invitedUsers.user",
@@ -333,9 +365,9 @@ exports.invitedUsers = async (req, res) => {
     });
   } catch (error) {
     console.error("InvitedUsers Error:", error);
-    res.status(500).json({
-      message: "Internal server error during invitedUsers.",
-    });
+    res
+      .status(500)
+      .json({ message: "Internal server error during invitedUsers." });
   }
 };
 
@@ -343,7 +375,6 @@ exports.invitedUsers = async (req, res) => {
 exports.invitedUsersverify = async (req, res) => {
   try {
     const { token } = req.body;
-    // console.log("✌️req.body --->", req.body);
 
     if (!token) {
       return res
@@ -353,81 +384,256 @@ exports.invitedUsersverify = async (req, res) => {
 
     const JWT_SECRET = process.env.JWT_SECRET_KEY;
     if (!JWT_SECRET) {
-      console.error("JWT_SECRET_KEY not defined in env");
       return res
         .status(500)
-        .json({ success: false, message: "Server config error" });
+        .json({ success: false, message: "JWT secret not configured" });
     }
 
+    // 🔐 Token verification
     let decoded;
     try {
       decoded = jwt.verify(token, JWT_SECRET);
     } catch (err) {
       console.error("Token verification failed:", err.message);
-      if (err.name === "TokenExpiredError") {
-        return res
-          .status(401)
-          .json({ success: false, message: "Token has expired" });
-      }
-      return res
-        .status(401)
-        .json({ success: false, message: "Token invalid or expired" });
+      const msg =
+        err.name === "TokenExpiredError"
+          ? "Token has expired"
+          : "Token invalid or expired";
+      return res.status(401).json({ success: false, message: msg });
     }
 
     const invitedUserId = decoded.id;
-
     const invitedUser = await User.findById(invitedUserId);
+
     if (!invitedUser) {
       return res
         .status(404)
-        .json({ success: false, message: "User not found" });
+        .json({ success: false, message: "Invited user not found" });
     }
 
+    // 🔍 Find inviter who invited this user
     const inviter = await User.findOne({
       "invitedUsers.user": invitedUser._id,
     });
+
     if (!inviter) {
       return res
         .status(404)
         .json({ success: false, message: "Inviter not found" });
     }
-    const updated = await User.updateOne(
-      {
-        _id: inviter._id,
-        "invitedUsers.user": invitedUser._id,
-      },
-      {
-        $set: {
-          "invitedUsers.$.invited_is_Confirmed": true,
-        },
-      }
+
+    // ✅ 1. Update inviter's invitedUsers[].invited_is_Confirmed = true
+    await User.updateOne(
+      { _id: inviter._id, "invitedUsers.user": invitedUser._id },
+      { $set: { "invitedUsers.$.invited_is_Confirmed": true } }
     );
 
+    // ✅ 2. Update invited user's confirmation flags
     invitedUser.is_Confirmed = true;
+    invitedUser.invited_is_Confirmed = true;
+
+    // ✅ 3. Prevent duplicate inviter in invitedUser.invitedBy[]
+    if (!Array.isArray(invitedUser.invitedBy)) {
+      invitedUser.invitedBy = [];
+    }
+
+    const alreadyExists = invitedUser.invitedBy.some((entry) => {
+      return (
+        entry._id.toString() === inviter._id.toString() &&
+        entry.email.toLowerCase() === inviter.email.toLowerCase()
+      );
+    });
+
+    if (!alreadyExists) {
+      invitedUser.invitedBy.push({
+        _id: inviter._id,
+        email: inviter.email,
+      });
+    }
+
     await invitedUser.save();
 
-    // Optional: Confirm invited user
-    await User.findByIdAndUpdate(invitedUserId, { is_Confirmed: true });
-
-    return res
-      .status(200)
-      .json({ success: true, message: "Invitation verified successfully!" });
+    return res.status(200).json({
+      success: true,
+      message: "Invitation verified successfully!",
+      invitedUser: {
+        _id: invitedUser._id,
+        email: invitedUser.email,
+        invitedBy: invitedUser.invitedBy,
+        is_Confirmed: invitedUser.is_Confirmed,
+      },
+    });
   } catch (error) {
-    console.error(" Error in verifyInvitedUser:", error);
+    console.error("Error in verifyInvitedUser:", error);
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
 
-// auth-control.js
-exports.getUserById = async (req, res) => {
+// Invited-UserData
+exports.getinvitedByUser = async (req, res) => {
   try {
-    const user = await User.findById(req.params.id).select("-password");
+    const user = await User.findById(req.user._id).select("-password");
+
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
-    res.status(200).json({ user });
+
+    // ✅ Step 1: Fetch all invitedBy users
+    const invitedByUsers = await Promise.all(
+      (user.invitedBy || []).map(async (inviter) => {
+        if (inviter._id && mongoose.Types.ObjectId.isValid(inviter._id)) {
+          const inviterUser = await User.findById(inviter._id).select(
+            "firstname lastname email profile_avatar bio gender mobile dob isadmin is_Confirmed"
+          );
+          return inviterUser || null;
+        }
+        return null;
+      })
+    );
+
+    // ✅ Step 2: Fetch all invitedUsers details
+    const invitedUsersWithDetails = await Promise.all(
+      (user.invitedUsers || []).map(async (invitedUser) => {
+        try {
+          let populatedUser = null;
+
+          if (
+            invitedUser.user &&
+            mongoose.Types.ObjectId.isValid(invitedUser.user)
+          ) {
+            populatedUser = await User.findById(invitedUser.user).select(
+              "firstname lastname email profile_avatar bio is_Confirmed gender mobile dob isadmin"
+            );
+          }
+
+          return {
+            _id: invitedUser._id,
+            email: invitedUser.email,
+            invited_is_Confirmed: invitedUser.invited_is_Confirmed,
+            invitationMessage: invitedUser.invitationMessage,
+            user: populatedUser, // null if user not found
+          };
+        } catch (err) {
+          console.error("Error fetching invited user:", err);
+          return {
+            _id: invitedUser._id,
+            email: invitedUser.email,
+            invited_is_Confirmed: invitedUser.invited_is_Confirmed,
+            invitationMessage: invitedUser.invitationMessage,
+            user: null,
+          };
+        }
+      })
+    );
+
+    // ✅ Final response
+    res.status(200).json({
+      message: "User and invitation data fetched successfully.",
+      user: {
+        _id: user._id,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        email: user.email,
+        profile_avatar: user.profile_avatar,
+        bio: user.bio,
+        is_Confirmed: user.is_Confirmed,
+        gender: user.gender,
+        mobile: user.mobile,
+        dob: user.dob,
+        isadmin: user.isadmin,
+      },
+      invitedBy: invitedByUsers.filter((u) => u !== null),
+      invitedUsers: invitedUsersWithDetails,
+    });
   } catch (error) {
-    console.error("getUserById Error:", error);
+    console.error("getinvitedByUser Error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
+};
+
+//getdbUserdata
+exports.getdbUserdata = async (req, res) => {
+  try {
+    const loginUserId = req.user._id.toString();
+
+    // Login user ના invitedUsers લાવો
+    const loginUser = await User.findById(loginUserId).select(
+      "invitedUsers invitedBy"
+    );
+
+    // 1. લૉગિન યુઝરે જેમને આમંત્રણ આપ્યું છે તેમનો ID લાવો
+    const invitedUserIds = loginUser.invitedUsers.map((invite) =>
+      invite.user.toString()
+    );
+
+    // 2. લૉગિન યુઝરને જેમણે આમંત્રણ આપ્યું છે તેમનો ID લાવો
+    const invitedByIds = loginUser.invitedBy.map((invite) =>
+      invite._id.toString()
+    );
+
+    // 3. બધાં 제외 (બહાર રાખવાના) ID મેળવો
+    const excludeIds = [loginUserId, ...invitedUserIds, ...invitedByIds];
+
+    // 4. હવે એમના સિવાયના બધા યુઝર્સ લાવો
+    const otherUsers = await User.find({
+      _id: { $nin: excludeIds },
+    }).select("-password -otp -otpExpiresAt");
+
+    res.status(200).json(otherUsers);
+  } catch (error) {
+    console.error("❌ Error in getdbUserdata:", error.message);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+//favoriteItem
+exports.favorite = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    console.log("✌️userId --->", userId);
+
+    const { messageId, chatType, content, type } = req.body;
+    console.log("✌️req.body --->", req.body);
+    console.log("✅ userId:", userId);
+    console.log("✅ req.body:", req.body);
+    console.log("✅ messageId:", messageId);
+    console.log("✅ chatType:", chatType);
+    console.log("✅ type:", type);
+    console.log("✅ content:", content);
+
+    // if (!messageId || !chatType || !type) {
+    //   return res.status(400).json({ msg: "All fields are required" });
+    // }
+    if (!messageId)
+      return res.status(400).json({ msg: "messageId is required" });
+    if (!chatType) return res.status(400).json({ msg: "chatType is required" });
+    if (!type) return res.status(400).json({ msg: "type is required" });
+
+    // Avoid duplicate entries
+    const user = await User.findById(userId);
+    const alreadyFavorited = user.isFavorite.some(
+      (fav) => fav.messageId.toString() === messageId
+    );
+
+    if (alreadyFavorited) {
+      return res.status(400).json({ msg: "Message already in favorites" });
+    }
+
+    await User.findByIdAndUpdate(userId, {
+      $push: {
+        isFavorite: {
+          messageId,
+          chatType,
+          content,
+          type,
+        },
+      },
+    });
+
+    res.status(200).json({ msg: "Message added to favorites" });
+  } catch (error) {
+    console.error("Favorite Error:", error);
+    res.status(500).json({ msg: "Server Error" });
+  }
+  ``;
 };

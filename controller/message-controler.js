@@ -1,5 +1,7 @@
 const User = require("../model/User-model");
 const MessageModel = require("../model/Message-model");
+const mongoose = require("mongoose");
+const { Types } = mongoose;
 
 exports.getuserforsilder = async (req, res) => {
   try {
@@ -73,10 +75,18 @@ exports.getChatHistory = async (req, res) => {
         .populate("messages.receiverId", "name email profile avatar")
         .populate("userIds", "name email profile avatar");
     } else {
+      const userId1Obj = new Types.ObjectId(userId1);
+      const userId2Obj = new Types.ObjectId(userId2);
       // Private chat
       chat = await MessageModel.findOne({
         chatType: "private",
-        userIds: { $all: [userId1, userId2] },
+        userIds: {
+          $all: [
+            { $elemMatch: { user: userId1Obj } },
+            { $elemMatch: { user: userId2Obj } },
+          ],
+        },
+        // "userIds.user": { $all: [userId1, userId2] },
       })
         .populate("messages.senderId", "name email profile avatar")
         .populate("messages.receiverId", "name email profile avatar");
@@ -126,20 +136,29 @@ exports.getChatHistory = async (req, res) => {
 exports.createGroup = async (req, res) => {
   try {
     const { groupName, description, members } = req.body;
-    console.log("req.body --->/cretgroupe", req.body);
-
     const creatorId = req.user._id;
 
     const newGroup = new MessageModel({
       chatType: "group",
       groupName,
       description,
-      userIds: members,
+      userIds: [
+        {
+          user: creatorId,
+          addedAt: new Date(),
+          role: "admin", // creator is admin
+        },
+        ...members.map((id) => ({
+          user: id,
+          addedAt: new Date(),
+          role: "member", // others are default members
+        })),
+      ],
       createdBy: creatorId,
       messages: [],
     });
+
     newGroup.groupId = newGroup._id;
-    console.log(" Group created in DB:", newGroup);
     await newGroup.save();
 
     const populatedGroup = await newGroup.populate(
@@ -165,7 +184,7 @@ exports.getUserGroups = async (req, res) => {
 
     const groups = await MessageModel.find({
       chatType: "group",
-      userIds: { $in: [userId] },
+      "userIds.user": userId,
     }).populate("createdBy", "firstname lastname email");
 
     res.status(200).json({ success: true, groups });
@@ -173,3 +192,79 @@ exports.getUserGroups = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+//ADD Member
+exports.GroupAddmember = async (req, res) => {
+  try {
+    const { groupId, newMemberIds } = req.body;
+    const requesterId = req.user._id;
+
+    const group = await MessageModel.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
+
+    const requester = group.userIds.find(
+      (u) => u.user.toString() === requesterId.toString()
+    );
+
+    if (!requester || !["admin", "subadmin"].includes(requester.role)) {
+      return res.status(403).json({ message: "Permission denied" });
+    }
+
+    const newMembers = newMemberIds.map((id) => ({
+      user: id,
+      addedAt: new Date(),
+      role: "member",
+    }));
+
+    group.userIds.push(...newMembers);
+    await group.save();
+
+    res.status(200).json({ message: "Members added", group });
+  } catch (err) {
+    console.error("Add member error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+//Delete Group
+// exports.deleteGroup = async (req, res) => {
+//   try {
+//     const { groupId } = req.body;
+//     const userId = req.user._id;
+
+//     const group = await MessageModel.findById(groupId);
+//     const isAdmin = group.userIds.find(
+//       (u) => u.user.toString() === userId.toString() && u.role === "admin"
+//     );
+
+//     if (!isAdmin) {
+//       return res.status(403).json({ message: "Only admin can delete group" });
+//     }
+
+//     await MessageModel.findByIdAndDelete(groupId);
+
+//     res.status(200).json({ message: "Group deleted successfully" });
+//   } catch (error) {
+//     console.error("Delete group error:", error);
+//     res.status(500).json({ message: error.message });
+//   }
+// };
+
+//leave Group
+// exports.leaveGroup = async (req, res) => {
+//   try {
+//     const { groupId } = req.body;
+//     const userId = req.user._id;
+
+//     const group = await MessageModel.findById(groupId);
+//     if (!group) return res.status(404).json({ message: "Group not found" });
+
+//     group.userIds = group.userIds.filter((u) => u.user.toString() !== userId.toString());
+
+//     await group.save();
+//     res.status(200).json({ message: "Left group successfully" });
+//   } catch (err) {
+//     console.error("Leave group error:", err);
+//     res.status(500).json({ message: err.message });
+//   }
+// };

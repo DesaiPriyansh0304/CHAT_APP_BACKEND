@@ -42,22 +42,18 @@ function initSocket(server) {
 
         // let contentUrl = textMessage;
         let contentUrls = [];
+        let rawSizes = [];
+        console.log("rawSizes  --->", rawSizes);
+
+        const convertSizes = (bytesArray) => {
+          return bytesArray.map((bytes) => ({
+            bytes,
+            kb: (bytes / 1024).toFixed(2), // 1 KB = 1024 bytes
+            mb: (bytes / (1024 * 1024)).toFixed(2), // 1 MB = 1024 * 1024 bytes
+          }));
+        };
         // let result = null;
         let uploadedFileNames = Array.isArray(fileName) ? fileName : [];
-
-        // if (base64Image) {
-        //   result = await cloudinary.uploader.upload(base64Image, {
-        //     folder: "chat/images",
-        //   });
-        //   contentUrl = result.secure_url;
-        //   // console.log(" Uploaded image to:", contentUrl);
-        // } else if (base64File) {
-        //   result = await cloudinary.uploader.upload(base64File, {
-        //     folder: "chat/files",
-        //     resource_type: "auto",
-        //   });
-        //   contentUrl = result.secure_url;
-        // }
 
         if (Array.isArray(base64Image) && base64Image.length > 0) {
           const imageUploadPromises = base64Image.map((img) =>
@@ -65,6 +61,7 @@ function initSocket(server) {
           );
           const uploadResults = await Promise.all(imageUploadPromises);
           contentUrls = uploadResults.map((res) => res.secure_url);
+          rawSizes = uploadResults.map((res) => res.bytes);
         } else if (Array.isArray(base64File) && base64File.length > 0) {
           const fileUploadPromises = base64File.map((file) =>
             cloudinary.uploader.upload(file, {
@@ -74,20 +71,39 @@ function initSocket(server) {
           );
           const uploadResults = await Promise.all(fileUploadPromises);
           contentUrls = uploadResults.map((res) => res.secure_url);
+          // contentSizes = uploadResults.map((res) => res.bytes);
+          rawSizes = uploadResults.map((res) => res.bytes);
         } else if (textMessage) {
           contentUrls = [textMessage];
         }
 
+        const convertedSizes = convertSizes(rawSizes);
+
         //  Find or create private conversation
         let conversation = await ConversationHistory.findOne({
           chatType: "private",
-          userIds: { $all: [senderObjectId, receiverObjectId] },
+          // userIds: { $all: [senderObjectId, receiverObjectId] },
+          // "userIds.user": { $all: [senderObjectId, receiverObjectId] },
+          userIds: {
+            $all: [
+              { $elemMatch: { user: senderObjectId } },
+              { $elemMatch: { user: receiverObjectId } },
+            ],
+          },
         });
+
+        // if (!conversation) {
+        //   conversation = new ConversationHistory({
+        //     chatType: "private",
+        //     userIds: [{ user: senderObjectId }, { user: receiverObjectId }], // ❗ no role or addedAt for private
+        //     messages: [],
+        //   });
+        // }
 
         if (!conversation) {
           conversation = new ConversationHistory({
             chatType: "private",
-            userIds: [senderObjectId, receiverObjectId],
+            userIds: [{ user: senderObjectId }, { user: receiverObjectId }],
             messages: [],
           });
         }
@@ -99,6 +115,7 @@ function initSocket(server) {
           content: contentUrls,
           fileName:
             uploadedFileNames.length > 0 ? uploadedFileNames : undefined,
+          fileSizes: convertedSizes,
           text: textMessage || undefined,
           seenBy: [senderObjectId],
           createdAt: new Date(),
@@ -167,26 +184,43 @@ function initSocket(server) {
         base64File = [],
         messageType,
         fileName = [],
+        // fileSizes = [],
       } = data;
 
       try {
         const senderObjectId = new mongoose.Types.ObjectId(senderId);
         const groupObjectId = new mongoose.Types.ObjectId(groupId);
 
-        // let contentUrl = textMessage;
+        const conversation = await ConversationHistory.findOne({
+          chatType: "group",
+          groupId: groupObjectId,
+        });
+
+        if (!conversation) {
+          return socket.emit("error", { message: "Group not found" });
+        }
+
+        // ✅ Get role of sender
+        const userInGroup = conversation.userIds.find(
+          (u) => u.user.toString() === senderId
+        );
+
+        if (!userInGroup) {
+          return socket.emit("error", {
+            message: "User not part of this group",
+          });
+        }
+
+        const role = userInGroup.role;
+
+        //If user is not part of group or blocked
+        if (!["admin", "subadmin", "member"].includes(role)) {
+          return socket.emit("error", {
+            message: "Not allowed to send messages",
+          });
+        }
+
         let contentUrls = [];
-        // if (base64Image) {
-        //   const result = await cloudinary.uploader.upload(base64Image, {
-        //     folder: "chat/images",
-        //   });
-        //   contentUrl = result.secure_url;
-        // } else if (base64File) {
-        //   const result = await cloudinary.uploader.upload(base64File, {
-        //     folder: "chat/files",
-        //     resource_type: "auto",
-        //   });
-        //   contentUrl = result.secure_url;
-        // }
 
         if (Array.isArray(base64Image) && base64Image.length > 0) {
           const imageUploadPromises = base64Image.map((img) =>
@@ -207,16 +241,22 @@ function initSocket(server) {
           contentUrls = [textMessage];
         }
 
-        let conversation = await ConversationHistory.findOne({
-          chatType: "group",
-          groupId: groupObjectId,
-        });
+        // let conversation = await ConversationHistory.findOne({
+        //   chatType: "group",
+        //   groupId: groupObjectId,
+        // });
 
         if (!conversation) {
           conversation = new ConversationHistory({
             chatType: "group",
             groupId,
+            createdBy,
             groupName: groupName,
+            userIds: members.map((id) => ({
+              user: id,
+              role: "member",
+              addedAt: new Date(),
+            })),
             messages: [],
           });
         }

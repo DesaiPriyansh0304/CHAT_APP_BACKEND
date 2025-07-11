@@ -9,7 +9,15 @@ router.get("/check", UserMiddleware, AuthController.checkAuth);
 router.put("/update-profile", UserMiddleware, AuthController.updateProfile);
 router.get("/getloginuser", UserMiddleware, AuthController.GetLoginuserData);
 router.get("/getalluser", AuthController.GetAlluserData);
-router.get("/get-user/:id", AuthController.getUserById);
+
+//inviteduser Data
+router.get("/get-inviteduser", UserMiddleware, AuthController.getinvitedByUser);
+
+//db store User
+router.get("/dbuser", UserMiddleware, AuthController.getdbUserdata);
+
+//favoriteItem
+router.post("/favorite", UserMiddleware, AuthController.favorite);
 
 //invitedUsers
 router.post("/invitedUsers", UserMiddleware, AuthController.invitedUsers);

@@ -55,7 +55,37 @@ const userSchema = new mongoose.Schema(
       {
         user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         email: String,
+        invitationMessage: { type: String },
         invited_is_Confirmed: { type: Boolean, default: false },
+      },
+    ],
+    invitedBy: [
+      {
+        _id: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        email: { type: String },
+      },
+    ],
+    isFavorite: [
+      {
+        messageId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "ConversationHistory",
+        },
+        chatType: {
+          type: String,
+          enum: ["private", "group"],
+          required: true,
+        },
+        content: [{ type: String }],
+        type: {
+          type: String,
+          enum: ["text", "image", "file"],
+          required: true,
+        },
+        addedAt: {
+          type: Date,
+          default: Date.now,
+        },
       },
     ],
   },

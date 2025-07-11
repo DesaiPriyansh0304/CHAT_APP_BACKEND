@@ -7,3 +7,21 @@ cloudinary.config({
 });
 
 module.exports = cloudinary;
+
+{
+  /*size in files*/
+}
+// cloudinary.uploader
+//   .upload("path/to/file.jpg", {
+//     resource_type: "image",
+//     folder: "chat/images",
+//   })
+//   .then((result) => {
+//     const fileSizeBytes = result.bytes;
+//     const fileSizeMB = (fileSizeBytes / (1024 * 1024)).toFixed(2);
+//     console.log(`✅ File uploaded: ${result.secure_url}`);
+//     console.log(`📦 File size: ${fileSizeBytes} bytes (${fileSizeMB} MB)`);
+//   })
+//   .catch((error) => {
+//     console.error("❌ Upload failed:", error);
+//   });
