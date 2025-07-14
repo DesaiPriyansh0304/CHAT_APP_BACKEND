@@ -55,6 +55,8 @@ exports.getChatHistory = async (req, res) => {
     const { userId1, userId2, groupId, page = 1 } = req.query;
     const pageSize = 10;
     const pageNumber = parseInt(page);
+    const userSelectFields =
+      "firstname lastname email profile_avatar bio gender dob";
 
     if (!groupId && (!userId1 || !userId2)) {
       return res.status(400).json({
@@ -71,13 +73,63 @@ exports.getChatHistory = async (req, res) => {
         chatType: "group",
         groupId: groupId,
       })
-        .populate("messages.senderId", "name email profile avatar")
-        .populate("messages.receiverId", "name email profile avatar")
-        .populate("userIds", "name email profile avatar");
+        .populate({
+          path: "messages.senderId",
+          select: userSelectFields,
+        })
+        .populate({
+          path: "messages.receiverId",
+          select: userSelectFields,
+        });
+
+      if (!chat) {
+        return res.status(404).json({
+          success: false,
+          message: "No chat history found",
+        });
+      }
+
+      // 🔧 Manually fetch user details
+      const groupUsers = await Promise.all(
+        chat.userIds.map(async (entry) => {
+          const userData = await User.findById(entry.user, userSelectFields);
+          return {
+            user: userData || {},
+            role: entry.role,
+            addedAt: entry.addedAt,
+          };
+        })
+      );
+
+      // Sort & paginate messages
+      const sortedMessages = chat.messages.sort(
+        (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+      );
+      const totalMessages = sortedMessages.length;
+      const totalPages = Math.ceil(totalMessages / pageSize);
+      const paginatedMessages = sortedMessages
+        .slice((pageNumber - 1) * pageSize, pageNumber * pageSize)
+        .reverse();
+
+      const cleanMessages = paginatedMessages.map((msg) => ({
+        ...msg.toObject(),
+        senderId: msg.senderId?._id || msg.senderId,
+        receiverId: msg.receiverId?._id || msg.receiverId,
+      }));
+
+      return res.json({
+        success: true,
+        currentPage: pageNumber,
+        totalPages,
+        totalMessages,
+        chatHistory: cleanMessages,
+        groupUsers,
+      });
     } else {
+      // Private chat
       const userId1Obj = new Types.ObjectId(userId1);
       const userId2Obj = new Types.ObjectId(userId2);
-      // Private chat
+
       chat = await MessageModel.findOne({
         chatType: "private",
         userIds: {
@@ -86,47 +138,52 @@ exports.getChatHistory = async (req, res) => {
             { $elemMatch: { user: userId2Obj } },
           ],
         },
-        // "userIds.user": { $all: [userId1, userId2] },
       })
-        .populate("messages.senderId", "name email profile avatar")
-        .populate("messages.receiverId", "name email profile avatar");
-    }
+        .populate({
+          path: "messages.senderId",
+          select: userSelectFields,
+        })
+        .populate({
+          path: "messages.receiverId",
+          select: userSelectFields,
+        });
 
-    if (!chat) {
-      return res.status(404).json({
-        success: false,
-        message: "No chat history found",
+      if (!chat) {
+        return res.status(404).json({
+          success: false,
+          message: "No chat history found",
+        });
+      }
+
+      const sortedMessages = chat.messages.sort(
+        (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+      );
+      const totalMessages = sortedMessages.length;
+      const totalPages = Math.ceil(totalMessages / pageSize);
+      const paginatedMessages = sortedMessages
+        .slice((pageNumber - 1) * pageSize, pageNumber * pageSize)
+        .reverse();
+
+      const firstMsg = chat.messages.find((m) => m.senderId && m.receiverId);
+      const sender = firstMsg?.senderId || null;
+      const receiver = firstMsg?.receiverId || null;
+
+      const cleanMessages = paginatedMessages.map((msg) => ({
+        ...msg.toObject(),
+        senderId: msg.senderId?._id || msg.senderId,
+        receiverId: msg.receiverId?._id || msg.receiverId,
+      }));
+
+      return res.json({
+        success: true,
+        currentPage: pageNumber,
+        totalPages,
+        totalMessages,
+        chatHistory: cleanMessages,
+        sender,
+        receiver,
       });
     }
-
-    // Latest to Oldest
-    const sortedMessages = chat.messages.sort(
-      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
-    );
-
-    // Pagination
-    const totalMessages = sortedMessages.length;
-    const totalPages = Math.ceil(totalMessages / pageSize);
-    const startIndex = (pageNumber - 1) * pageSize;
-    const endIndex = startIndex + pageSize;
-    const paginatedMessages = sortedMessages.slice(startIndex, endIndex);
-
-    // Reverse again to display Oldest at top, Newest at bottom
-    const finalMessages = paginatedMessages.reverse();
-
-    const response = {
-      success: true,
-      currentPage: pageNumber,
-      totalPages,
-      totalMessages,
-      chatHistory: finalMessages,
-    };
-
-    if (chat.chatType === "group") {
-      response.groupUsers = chat.userIds;
-    }
-
-    res.json(response);
   } catch (error) {
     console.error("Chat history error:", error);
     res.status(500).json({ success: false, message: error.message });

@@ -472,61 +472,77 @@ exports.invitedUsersverify = async (req, res) => {
 // Invited-UserData
 exports.getinvitedByUser = async (req, res) => {
   try {
+    const searchQuery = (req.query.search || "").toLowerCase(); // search from query
     const user = await User.findById(req.user._id).select("-password");
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ Step 1: Fetch all invitedBy users
-    const invitedByUsers = await Promise.all(
+    // 🔹 1. Fetch invitedBy users
+    let invitedByUsers = await Promise.all(
       (user.invitedBy || []).map(async (inviter) => {
         if (inviter._id && mongoose.Types.ObjectId.isValid(inviter._id)) {
-          const inviterUser = await User.findById(inviter._id).select(
+          return await User.findById(inviter._id).select(
             "firstname lastname email profile_avatar bio gender mobile dob isadmin is_Confirmed"
           );
-          return inviterUser || null;
         }
         return null;
       })
     );
 
-    // ✅ Step 2: Fetch all invitedUsers details
-    const invitedUsersWithDetails = await Promise.all(
+    invitedByUsers = invitedByUsers.filter((u) => u !== null); // Remove nulls
+
+    // 🔹 2. Filter invitedBy users by searchQuery
+    if (searchQuery) {
+      invitedByUsers = invitedByUsers.filter((u) => {
+        const fullName = `${u.firstname} ${u.lastname}`.toLowerCase();
+        return (
+          fullName.includes(searchQuery) ||
+          u.email.toLowerCase().includes(searchQuery)
+        );
+      });
+    }
+
+    // 🔹 3. Fetch invitedUsers
+    let invitedUsersWithDetails = await Promise.all(
       (user.invitedUsers || []).map(async (invitedUser) => {
-        try {
-          let populatedUser = null;
+        let populatedUser = null;
 
-          if (
-            invitedUser.user &&
-            mongoose.Types.ObjectId.isValid(invitedUser.user)
-          ) {
-            populatedUser = await User.findById(invitedUser.user).select(
-              "firstname lastname email profile_avatar bio is_Confirmed gender mobile dob isadmin"
-            );
-          }
-
-          return {
-            _id: invitedUser._id,
-            email: invitedUser.email,
-            invited_is_Confirmed: invitedUser.invited_is_Confirmed,
-            invitationMessage: invitedUser.invitationMessage,
-            user: populatedUser, // null if user not found
-          };
-        } catch (err) {
-          console.error("Error fetching invited user:", err);
-          return {
-            _id: invitedUser._id,
-            email: invitedUser.email,
-            invited_is_Confirmed: invitedUser.invited_is_Confirmed,
-            invitationMessage: invitedUser.invitationMessage,
-            user: null,
-          };
+        if (
+          invitedUser.user &&
+          mongoose.Types.ObjectId.isValid(invitedUser.user)
+        ) {
+          populatedUser = await User.findById(invitedUser.user).select(
+            "firstname lastname email profile_avatar bio is_Confirmed gender mobile dob isadmin"
+          );
         }
+
+        return {
+          _id: invitedUser._id,
+          email: invitedUser.email,
+          invited_is_Confirmed: invitedUser.invited_is_Confirmed,
+          invitationMessage: invitedUser.invitationMessage,
+          user: populatedUser,
+        };
       })
     );
 
-    // ✅ Final response
+    // 🔹 4. Filter invitedUsers by searchQuery (based on user field)
+    if (searchQuery) {
+      invitedUsersWithDetails = invitedUsersWithDetails.filter((entry) => {
+        const u = entry.user;
+        if (!u) return false;
+
+        const fullName = `${u.firstname} ${u.lastname}`.toLowerCase();
+        return (
+          fullName.includes(searchQuery) ||
+          u.email.toLowerCase().includes(searchQuery)
+        );
+      });
+    }
+
+    // ✅ Final Response
     res.status(200).json({
       message: "User and invitation data fetched successfully.",
       user: {
@@ -542,7 +558,7 @@ exports.getinvitedByUser = async (req, res) => {
         dob: user.dob,
         isadmin: user.isadmin,
       },
-      invitedBy: invitedByUsers.filter((u) => u !== null),
+      invitedBy: invitedByUsers,
       invitedUsers: invitedUsersWithDetails,
     });
   } catch (error) {
@@ -556,28 +572,40 @@ exports.getdbUserdata = async (req, res) => {
   try {
     const loginUserId = req.user._id.toString();
 
-    // Login user ના invitedUsers લાવો
     const loginUser = await User.findById(loginUserId).select(
       "invitedUsers invitedBy"
     );
 
-    // 1. લૉગિન યુઝરે જેમને આમંત્રણ આપ્યું છે તેમનો ID લાવો
     const invitedUserIds = loginUser.invitedUsers.map((invite) =>
       invite.user.toString()
     );
 
-    // 2. લૉગિન યુઝરને જેમણે આમંત્રણ આપ્યું છે તેમનો ID લાવો
     const invitedByIds = loginUser.invitedBy.map((invite) =>
       invite._id.toString()
     );
 
-    // 3. બધાં 제외 (બહાર રાખવાના) ID મેળવો
     const excludeIds = [loginUserId, ...invitedUserIds, ...invitedByIds];
 
-    // 4. હવે એમના સિવાયના બધા યુઝર્સ લાવો
-    const otherUsers = await User.find({
+    // 🔍 Search query
+    const searchQuery = req.query.search || "";
+    const searchRegex = new RegExp(searchQuery, "i");
+
+    // 🔎 Mongo query
+    const filter = {
       _id: { $nin: excludeIds },
-    }).select("-password -otp -otpExpiresAt");
+    };
+
+    if (searchQuery.trim()) {
+      filter.$or = [
+        { firstname: { $regex: searchRegex } },
+        { lastname: { $regex: searchRegex } },
+        { email: { $regex: searchRegex } },
+      ];
+    }
+
+    const otherUsers = await User.find(filter).select(
+      "-password -otp -otpExpiresAt"
+    );
 
     res.status(200).json(otherUsers);
   } catch (error) {
@@ -636,4 +664,156 @@ exports.favorite = async (req, res) => {
     res.status(500).json({ msg: "Server Error" });
   }
   ``;
+};
+
+//SerchUser/
+exports.SearchUser = async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query) {
+      return res.status(400).json({ error: "Search query is required" });
+    }
+
+    // Case-insensitive partial match in firstname, lastname, or email
+    const users = await User.find({
+      $or: [
+        { firstname: { $regex: query, $options: "i" } },
+        { lastname: { $regex: query, $options: "i" } },
+        { email: { $regex: query, $options: "i" } },
+      ],
+    }).select("firstname lastname email profile_avatar"); // select only needed fields
+
+    res.status(200).json(users);
+  } catch (err) {
+    console.error("Search error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+};
+
+exports.getfilterByUser = async (req, res) => {
+  try {
+    const { filter, searchQuery } = req.body; // include searchQuery
+    const user = await User.findById(req.user._id).select("-password");
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Get invited users and populate details
+    const invitedUsersWithDetails = await Promise.all(
+      (user.invitedUsers || []).map(async (invitedUser) => {
+        try {
+          let populatedUser = null;
+
+          if (
+            invitedUser.user &&
+            mongoose.Types.ObjectId.isValid(invitedUser.user)
+          ) {
+            populatedUser = await User.findById(invitedUser.user).select(
+              "firstname lastname email profile_avatar bio is_Confirmed gender mobile dob isadmin"
+            );
+          }
+
+          return {
+            _id: invitedUser._id,
+            email: invitedUser.email,
+            invited_is_Confirmed: invitedUser.invited_is_Confirmed,
+            invitationMessage: invitedUser.invitationMessage || null,
+            user: populatedUser,
+          };
+        } catch (err) {
+          console.error("Error fetching invited user:", err);
+          return {
+            _id: invitedUser._id,
+            email: invitedUser.email,
+            invited_is_Confirmed: invitedUser.invited_is_Confirmed,
+            invitationMessage: invitedUser.invitationMessage || null,
+            user: null,
+          };
+        }
+      })
+    );
+
+    // Filter invited users
+    let filtered = [];
+    if (filter === "verify") {
+      filtered = invitedUsersWithDetails.filter(
+        (u) => u.invited_is_Confirmed === true && u.user === null
+      );
+    } else if (filter === "unverify") {
+      filtered = invitedUsersWithDetails.filter(
+        (u) => u.invited_is_Confirmed === false && u.user === null
+      );
+    } else if (filter === "pending") {
+      filtered = invitedUsersWithDetails.filter(
+        (u) => u.invited_is_Confirmed === false && u.user !== null
+      );
+    } else {
+      filtered = invitedUsersWithDetails;
+    }
+
+    // Apply search on filtered users
+    let finalResult = filtered;
+
+    if (searchQuery && searchQuery.trim() !== "") {
+      const searchTerms = searchQuery.toLowerCase().split(" ").filter(Boolean);
+
+      finalResult = filtered.filter((u) => {
+        const userObj = u.user;
+
+        let valuesToSearch = [];
+
+        if (filter === "verify" || filter === "unverify") {
+          valuesToSearch = [u.email?.toLowerCase() || ""];
+        } else if (filter === "pending") {
+          valuesToSearch = [
+            u.email?.toLowerCase() || "",
+            userObj?.firstname?.toLowerCase() || "",
+            userObj?.lastname?.toLowerCase() || "",
+          ];
+        } else {
+          // fallback for "all"
+          valuesToSearch = [
+            u.email?.toLowerCase() || "",
+            userObj?.firstname?.toLowerCase() || "",
+            userObj?.lastname?.toLowerCase() || "",
+            userObj?.gender?.toLowerCase() || "",
+          ];
+        }
+
+        return searchTerms.every((term) =>
+          valuesToSearch.some((field) => field.includes(term))
+        );
+      });
+    }
+
+    return res.status(200).json({
+      message: "Filtered invited users fetched successfully.",
+      filter: filter || "all",
+      searchQuery: searchQuery || null,
+      users: finalResult,
+    });
+  } catch (error) {
+    console.error("getFilteredInvitedUsers Error:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+exports.onlineByUser = async (req, res) => {
+  try {
+    const { userIds } = req.body;
+    if (!Array.isArray(userIds)) {
+      return res.status(400).json({ error: "userIds must be an array" });
+    }
+
+    const users = await User.find({ _id: { $in: userIds } }).select(
+      "_id firstName lastName avatar"
+    );
+
+    res.status(200).json({ users });
+  } catch (err) {
+    console.error("Error fetching user details:", err);
+    res.status(500).json({ error: "Server error" });
+  }
 };

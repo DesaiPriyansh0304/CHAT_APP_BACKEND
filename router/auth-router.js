@@ -27,4 +27,13 @@ router.post("/invitedUsers-verify", AuthController.invitedUsersverify);
 router.post("/forgotPassword", AuthController.forgotPassword);
 router.post("/resetPassword", AuthController.resetPassword);
 
+//SearchUser
+router.get("/serchuser", AuthController.SearchUser);
+
+//getfilter Data
+router.post("/get-filteruser", UserMiddleware, AuthController.getfilterByUser);
+
+//online user
+router.post("/get-onlineuser", AuthController.onlineByUser);
+
 module.exports = router;
