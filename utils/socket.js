@@ -52,6 +52,7 @@ function initSocket(server) {
             mb: (bytes / (1024 * 1024)).toFixed(2), // 1 MB = 1024 * 1024 bytes
           }));
         };
+
         // let result = null;
         let uploadedFileNames = Array.isArray(fileName) ? fileName : [];
 

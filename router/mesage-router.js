@@ -10,5 +10,7 @@ router.get("/chat-history", MessageController.getChatHistory); //chat-history
 router.post("/creategroup", UserMiddleware, MessageController.createGroup); //create group
 router.get("/usergroups", UserMiddleware, MessageController.getUserGroups); //get groups
 router.post("/addmember", UserMiddleware, MessageController.GroupAddmember); //add member
+router.post("/deletegroup", UserMiddleware, MessageController.deleteGroup); //add member
+router.post("/leavegroup", UserMiddleware, MessageController.leaveGroup);
 
 module.exports = router;

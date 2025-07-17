@@ -52,7 +52,7 @@ exports.getuserforsilder = async (req, res) => {
 
 exports.getChatHistory = async (req, res) => {
   try {
-    const { userId1, userId2, groupId, page = 1 } = req.query;
+    const { userId1, userId2, groupId, page = 1, searchText = "" } = req.query;
     const pageSize = 10;
     const pageNumber = parseInt(page);
     const userSelectFields =
@@ -101,10 +101,20 @@ exports.getChatHistory = async (req, res) => {
         })
       );
 
-      // Sort & paginate messages
-      const sortedMessages = chat.messages.sort(
+      // 🔍 Filter and sort
+      let filteredMessages = chat.messages;
+
+      if (searchText.trim()) {
+        const lowerSearch = searchText.toLowerCase();
+        filteredMessages = filteredMessages.filter((msg) =>
+          msg.content?.toLowerCase().includes(lowerSearch)
+        );
+      }
+
+      const sortedMessages = filteredMessages.sort(
         (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
       );
+
       const totalMessages = sortedMessages.length;
       const totalPages = Math.ceil(totalMessages / pageSize);
       const paginatedMessages = sortedMessages
@@ -155,9 +165,20 @@ exports.getChatHistory = async (req, res) => {
         });
       }
 
-      const sortedMessages = chat.messages.sort(
+      // 🔍 Filter and sort
+      let filteredMessages = chat.messages;
+
+      if (searchText.trim()) {
+        const lowerSearch = searchText.toLowerCase();
+        filteredMessages = filteredMessages.filter((msg) =>
+          msg.content?.toLowerCase().includes(lowerSearch)
+        );
+      }
+
+      const sortedMessages = filteredMessages.sort(
         (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
       );
+
       const totalMessages = sortedMessages.length;
       const totalPages = Math.ceil(totalMessages / pageSize);
       const paginatedMessages = sortedMessages
@@ -237,16 +258,25 @@ exports.createGroup = async (req, res) => {
 //grop find in user
 exports.getUserGroups = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const groups = await MessageModel.find({ chatType: "group" })
+      .select("-messages") // optional: exclude messages
+      .populate({
+        path: "createdBy",
+        select: "_id firstname lastname email",
+      })
+      .populate({
+        path: "userIds.user",
+        model: "User",
+        select: "_id firstname lastname email",
+      });
 
-    const groups = await MessageModel.find({
-      chatType: "group",
-      "userIds.user": userId,
-    }).populate("createdBy", "firstname lastname email");
-
-    res.status(200).json({ success: true, groups });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
+    res.json({
+      success: true,
+      groups,
+    });
+  } catch (err) {
+    console.error("❌ Error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -284,44 +314,60 @@ exports.GroupAddmember = async (req, res) => {
 };
 
 //Delete Group
-// exports.deleteGroup = async (req, res) => {
-//   try {
-//     const { groupId } = req.body;
-//     const userId = req.user._id;
+exports.deleteGroup = async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    const userId = req.user._id;
 
-//     const group = await MessageModel.findById(groupId);
-//     const isAdmin = group.userIds.find(
-//       (u) => u.user.toString() === userId.toString() && u.role === "admin"
-//     );
+    const group = await MessageModel.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
 
-//     if (!isAdmin) {
-//       return res.status(403).json({ message: "Only admin can delete group" });
-//     }
+    const isAdmin = group.userIds.find(
+      (u) => u.user.toString() === userId.toString() && u.role === "admin"
+    );
 
-//     await MessageModel.findByIdAndDelete(groupId);
+    if (!isAdmin) {
+      return res.status(403).json({ message: "Only admin can delete group" });
+    }
 
-//     res.status(200).json({ message: "Group deleted successfully" });
-//   } catch (error) {
-//     console.error("Delete group error:", error);
-//     res.status(500).json({ message: error.message });
-//   }
-// };
+    await MessageModel.findByIdAndDelete(groupId);
+    res.status(200).json({ message: "Group deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
 
 //leave Group
-// exports.leaveGroup = async (req, res) => {
-//   try {
-//     const { groupId } = req.body;
-//     const userId = req.user._id;
+exports.leaveGroup = async (req, res) => {
+  try {
+    const { groupId } = req.body;
+    const userId = req.user._id;
 
-//     const group = await MessageModel.findById(groupId);
-//     if (!group) return res.status(404).json({ message: "Group not found" });
+    const group = await MessageModel.findById(groupId);
+    if (!group) return res.status(404).json({ message: "Group not found" });
 
-//     group.userIds = group.userIds.filter((u) => u.user.toString() !== userId.toString());
+    const currentUser = group.userIds.find(
+      (u) => u.user.toString() === userId.toString()
+    );
 
-//     await group.save();
-//     res.status(200).json({ message: "Left group successfully" });
-//   } catch (err) {
-//     console.error("Leave group error:", err);
-//     res.status(500).json({ message: err.message });
-//   }
-// };
+    if (!currentUser) {
+      return res.status(403).json({ message: "User not in group" });
+    }
+
+    // Block admin from leaving directly
+    if (currentUser.role === "admin") {
+      return res
+        .status(403)
+        .json({ message: "Admin cannot leave group directly" });
+    }
+
+    // Remove user from group
+    await MessageModel.findByIdAndUpdate(groupId, {
+      $pull: { userIds: { user: userId } },
+    });
+
+    res.status(200).json({ message: "Left group successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
