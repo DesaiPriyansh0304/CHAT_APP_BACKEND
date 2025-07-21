@@ -43,7 +43,7 @@ function initSocket(server) {
         // let contentUrl = textMessage;
         let contentUrls = [];
         let rawSizes = [];
-        console.log("rawSizes  --->", rawSizes);
+        // console.log("rawSizes  --->", rawSizes);
 
         const convertSizes = (bytesArray) => {
           return bytesArray.map((bytes) => ({
@@ -72,7 +72,6 @@ function initSocket(server) {
           );
           const uploadResults = await Promise.all(fileUploadPromises);
           contentUrls = uploadResults.map((res) => res.secure_url);
-          // contentSizes = uploadResults.map((res) => res.bytes);
           rawSizes = uploadResults.map((res) => res.bytes);
         } else if (textMessage) {
           contentUrls = [textMessage];
@@ -83,8 +82,6 @@ function initSocket(server) {
         //  Find or create private conversation
         let conversation = await ConversationHistory.findOne({
           chatType: "private",
-          // userIds: { $all: [senderObjectId, receiverObjectId] },
-          // "userIds.user": { $all: [senderObjectId, receiverObjectId] },
           userIds: {
             $all: [
               { $elemMatch: { user: senderObjectId } },
@@ -92,14 +89,6 @@ function initSocket(server) {
             ],
           },
         });
-
-        // if (!conversation) {
-        //   conversation = new ConversationHistory({
-        //     chatType: "private",
-        //     userIds: [{ user: senderObjectId }, { user: receiverObjectId }], // ❗ no role or addedAt for private
-        //     messages: [],
-        //   });
-        // }
 
         if (!conversation) {
           conversation = new ConversationHistory({
@@ -139,18 +128,67 @@ function initSocket(server) {
         console.log(" Message saved in DB");
 
         // Emit to receiver if online
-        const receiverSocket = userSocketMap[receiverId];
-        if (receiverSocket) {
-          io.to(receiverSocket).emit("privateMessage", normalizedMessage);
-          console.log(" Emitted to receiver:2", normalizedMessage);
+        const isReceiverOnline = userSocketMap[receiverId];
+        const isSameChatOpen = openedChats[receiverId] === senderId.toString();
+
+        if (isReceiverOnline && isSameChatOpen) {
+          io.to(userSocketMap[receiverId]).emit(
+            "privateMessage",
+            normalizedMessage
+          );
+        } else {
+          // count update logic
+          const existing = conversation.unreadMessageCount.find((entry) =>
+            entry.user.equals(receiverObjectId)
+          );
+          if (existing) {
+            existing.count += 1;
+          } else {
+            conversation.unreadMessageCount.push({
+              user: receiverObjectId,
+              count: 1,
+            });
+          }
         }
 
         // Emit to sender (self)
         socket.emit("privateMessage", normalizedMessage);
-
+        await conversation.save();
         // console.log(" Message emitted to users:", normalizedMessage);
       } catch (err) {
         console.error(" Error saving message:", err);
+      }
+    });
+
+    socket.on("markMessagesAsRead", async ({ senderId, receiverId }) => {
+      try {
+        const receiverObjectId = new mongoose.Types.ObjectId(receiverId);
+        const conversation = await ConversationHistory.findOne({
+          chatType: "private",
+          userIds: {
+            $all: [
+              { $elemMatch: { user: new mongoose.Types.ObjectId(senderId) } },
+              { $elemMatch: { user: receiverObjectId } },
+            ],
+          },
+        });
+
+        if (!conversation) return;
+
+        conversation.messages.forEach((msg) => {
+          if (!msg.seenBy.includes(receiverObjectId)) {
+            msg.seenBy.push(receiverObjectId);
+          }
+        });
+
+        const unreadEntry = conversation.unreadMessageCount.find((entry) =>
+          entry.user.equals(receiverObjectId)
+        );
+        if (unreadEntry) unreadEntry.count = 0;
+
+        await conversation.save();
+      } catch (err) {
+        console.error("Error marking messages as read:", err);
       }
     });
 
@@ -300,6 +338,18 @@ function initSocket(server) {
       } catch (error) {
         console.error("⚫Error in groupMessage:", error);
       }
+    });
+
+    const openedChats = {}; // key: userId, value: chatUserId
+
+    // frontend thi emit karo:
+    socket.on("openChatWith", ({ userId, chatWithUserId }) => {
+      openedChats[userId] = chatWithUserId;
+    });
+
+    // disconnect par clean karo:
+    socket.on("disconnect", () => {
+      delete openedChats[userId];
     });
 
     //  DISCONNECT

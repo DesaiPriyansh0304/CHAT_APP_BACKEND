@@ -2,7 +2,6 @@ const User = require("../model/User-model");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const generateToken = require("../utils/generateToken");
-// const { formatDate } = require("../utils/UtcDate");
 const conrdinary = require("../utils/Cloudinary");
 const generateOtp = require("../utils/generateOTP");
 const sendEmailUtil = require("../utils/Nodemailerutil");
@@ -28,7 +27,11 @@ exports.Register = async (req, res) => {
     // Check if user already exists
     const userExist = await User.findOne({ email });
     if (userExist) {
-      return res.status(400).json({ message: "Email already exists." });
+      return res.status(400).json({
+        status: 400,
+        success: false,
+        message: "Email already exists.",
+      });
     }
 
     // Generate OTP
@@ -83,6 +86,7 @@ exports.Register = async (req, res) => {
 
     // Send response
     res.status(201).json({
+      status: 201,
       success: true,
       msg: "SignUp Successful. OTP sent to your email.Please verify",
       // data: userCreated,
@@ -102,41 +106,50 @@ exports.Register = async (req, res) => {
 exports.Login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    // console.log("req.body --->/Login/SignIn//auth-controller", req.body);
 
-    //email in valide
+    // Check if user exists
     const userExist = await User.findOne({ email });
     if (!userExist) {
-      return res.status(400).json({ message: "Email/Uses Not Valide." });
+      return res.status(400).json({
+        status: 400,
+        message: "Email/User Not Valid.",
+      });
     }
 
-    //Check email is verified
+    // Check if email is verified
     if (!userExist.is_Confirmed) {
       return res.status(403).json({
+        status: 403,
         message:
           "Email not verified. Please verify your email before logging in.",
       });
     }
 
-    //Compare hashed password
+    // Compare hashed password
     const isMatch = await bcrypt.compare(password, userExist.password);
     if (!isMatch) {
-      return res.status(400).json({ message: "Invalid Password." });
+      return res.status(400).json({
+        status: 400,
+        message: "Invalid Password.",
+      });
     }
 
-    //verifid email in nodemailer
-
-    //Response Data
-    res.status(201).json({
-      msg: "SignIn Successful",
+    // Successful login response
+    res.status(200).json({
+      status: 200,
       success: true,
-      data: userExist,
+      message: "Login successful",
+      userData: userExist,
       token: generateToken(userExist),
       userId: userExist._id.toString(),
     });
   } catch (error) {
     console.error("Login Error:", error);
-    res.status(500).json({ message: "Internal server error  Login/signIn" });
+    res.status(500).json({
+      status: 500,
+      success: false,
+      message: "Internal server error during login.",
+    });
   }
 };
 
@@ -144,7 +157,31 @@ exports.Login = async (req, res) => {
   /*controller to checked if user is authnticated*/
 }
 exports.checkAuth = async (req, res) => {
-  res.status(201).json({ success: true, decoded: req.user });
+  try {
+    const userId = req.user._id;
+
+    const user = await User.findById(userId).select("-password -otp");
+    if (!user) {
+      return res.status(404).json({
+        status: 404,
+        message: "User not found",
+      });
+    }
+
+    res.status(200).json({
+      status: 200,
+      success: true,
+      message: "User authenticated",
+      user,
+    });
+  } catch (err) {
+    console.error("🔴 Error in checkAuth:", err.message);
+    res.status(500).json({
+      status: 500,
+      success: false,
+      message: "Server Error",
+    });
+  }
 };
 
 // get only login user data

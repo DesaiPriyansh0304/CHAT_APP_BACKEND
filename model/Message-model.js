@@ -129,6 +129,12 @@ const conversationHistorySchema = new mongoose.Schema(
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" }, // For group creation
     groupName: { type: String }, // Optional group name
     messages: [messageSubSchema], // All chat messages
+    unreadMessageCount: [
+      {
+        user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        count: { type: Number, default: 0 },
+      },
+    ],
   },
   { timestamps: true }
 );
