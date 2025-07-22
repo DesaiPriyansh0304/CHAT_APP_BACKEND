@@ -13,10 +13,11 @@ function initSocket(server) {
   });
 
   io.on("connection", (socket) => {
-    // console.log("🟣 New socket connected:", socket.id);
+    console.log("🟣 New socket connected:", socket.id);
 
     const userId = socket.handshake.query.userId;
-    // console.log("🟢 Connected userId:", userId);
+    console.log("🟢 Connected userId:", userId);
+    console.log("👉 userId from client:", socket.handshake.query.userId);
 
     if (userId) {
       userSocketMap[userId] = socket.id;
@@ -239,7 +240,7 @@ function initSocket(server) {
           return socket.emit("error", { message: "Group not found" });
         }
 
-        // ✅ Get role of sender
+        //  Get role of sender
         const userInGroup = conversation.userIds.find(
           (u) => u.user.toString() === senderId
         );
@@ -356,7 +357,7 @@ function initSocket(server) {
     socket.on("disconnect", () => {
       delete userSocketMap[userId];
       io.emit("getOnlineUsers", Object.keys(userSocketMap));
-      // console.log("🔴User disconnected:", userId);
+      console.log("🔴User disconnected:", userId);
     });
   });
 }
