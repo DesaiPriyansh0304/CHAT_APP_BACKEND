@@ -1,12 +1,10 @@
 const { Server } = require("socket.io");
-const { handlePrivateMessage } = require("./privateMessageHandler");
-const { handleGroupMessage } = require("./groupMessageHandler");
-const { handleTyping } = require("./typingHandler");
-const { handleConnection } = require("./connectionHandler");
-const { handleChatTracking } = require("./chatTrackingHandler");
+const ConnectionHandler = require("./connectionHandler");
+const PrivateMessageHandler = require("./privateMessageHandler");
+const GroupMessageHandler = require("./groupMessageHandler");
+const ReadReceiptsHandler = require("./Readhandle");
+const TypingHandler = require("./typingHandler");
 
-const userSocketMap = {}; // userId => socket.id
-const openedChats = {}; // key: userId, value: chatUserId
 let io;
 
 function initSocket(server) {
@@ -18,31 +16,29 @@ function initSocket(server) {
   io.on("connection", (socket) => {
     console.log("🟣 New socket connected:", socket.id);
 
-    const userId = socket.handshake.query.userId;
-    console.log("🟢 Connected userId:", userId);
+    // Initialize handlers
+    const connectionHandler = new ConnectionHandler(io, socket);
+    const privateMessageHandler = new PrivateMessageHandler(io, socket);
+    const groupMessageHandler = new GroupMessageHandler(io, socket);
+    const readReceiptsHandler = new ReadReceiptsHandler(io, socket);
+    const typingHandler = new TypingHandler(io, socket);
 
-    // Connection handler
-    handleConnection(socket, userId, userSocketMap, io);
+    // Connection events
+    connectionHandler.handleConnection();
+    connectionHandler.handleChatOpen();
+    connectionHandler.handleGroupJoin();
+    connectionHandler.handleDisconnect();
 
-    // Private message handler
-    handlePrivateMessage(socket, userSocketMap, openedChats, io);
+    // Message events
+    privateMessageHandler.handlePrivateMessage();
+    groupMessageHandler.handleGroupMessage();
 
-    // Group message handler
-    handleGroupMessage(socket, io);
+    // Read receipts events
+    readReceiptsHandler.handleMarkAsRead();
+    readReceiptsHandler.handleMarkGroupAsRead();
 
-    // Typing handler
-    handleTyping(socket, userId, userSocketMap, io);
-
-    // Chat tracking handler
-    handleChatTracking(socket, openedChats, userId);
-
-    // Disconnect handler
-    socket.on("disconnect", () => {
-      delete userSocketMap[userId];
-      delete openedChats[userId];
-      io.emit("getOnlineUsers", Object.keys(userSocketMap));
-      console.log("🔴User disconnected:", userId);
-    });
+    // Typing events
+    typingHandler.handleTyping();
   });
 }
 
@@ -50,4 +46,4 @@ function getIO() {
   return io;
 }
 
-module.exports = { initSocket, getIO, userSocketMap, openedChats };
+module.exports = { initSocket, getIO };

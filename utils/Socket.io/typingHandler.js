@@ -1,14 +1,33 @@
-function handleTyping(socket, userId, userSocketMap, io) {
-  socket.on("typing", ({ receiverId, groupId, isTyping }) => {
-    if (groupId) {
-      io.to(groupId).emit("groupTyping", { senderId: userId, isTyping });
-    } else {
-      const sock = userSocketMap[receiverId];
-      if (sock) {
-        io.to(sock).emit("typing", { senderId: userId, isTyping });
+const { userSocketMap } = require("./socketmap");
+
+class TypingHandler {
+  constructor(io, socket) {
+    this.io = io;
+    this.socket = socket;
+    this.userId = socket.handshake.query.userId;
+  }
+
+  handleTyping() {
+    // TYPING
+    this.socket.on("typing", ({ receiverId, groupId, isTyping }) => {
+      if (groupId) {
+        // Group typing indicator
+        this.socket.to(groupId).emit("groupTyping", {
+          senderId: this.userId,
+          isTyping,
+        });
+      } else {
+        // Private typing indicator
+        const receiverSocket = userSocketMap[receiverId];
+        if (receiverSocket) {
+          this.io.to(receiverSocket).emit("typing", {
+            senderId: this.userId,
+            isTyping,
+          });
+        }
       }
-    }
-  });
+    });
+  }
 }
 
-module.exports = { handleTyping };
+module.exports = TypingHandler;

@@ -7,15 +7,18 @@ exports.verifyOtp = async (req, res) => {
     const { email, otp } = req.body;
 
     //Email & OTP check
-    if (!email || !otp) {
-      return res.status(400).json({ message: "Email and OTP are required." });
+    if (!email) {
+      return res.status(400).json({ message: "Email are required." });
+    }
+    if (!otp) {
+      return res.status(400).json({ message: "OTP are required." });
     }
 
     //user by email & otp
     const user = await User.findOne({ email, otp });
 
     if (!user) {
-      return res.status(400).json({ message: "Invalid OTP or Email." });
+      return res.status(400).json({ message: "Invalid OTP" });
     }
 
     // Check OTP expiry
